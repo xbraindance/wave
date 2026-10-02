@@ -49,7 +49,10 @@ public:
         float detuneCents = 0.0f;
         float gain = 1.0f;
         float auxGain = 0.0f;
-        int audioOutput = 0;
+        // Firmware "Audio Out" (Instrument part byte +0xC): 0 Aux only,
+        // 1 main, 2 sub 1, 3 sub 2. Only main reaches the plugin output.
+        static constexpr int mainAudioOut = 1;
+        int audioOutput = mainAudioOut;
         int keyLow = 0;
         int keyHigh = 127;
         int velocityLow = 1;
@@ -257,7 +260,6 @@ private:
         bool active = false;
         float currentWavePosition = 0.0f;
         std::array<float, 2> currentLfoValues{};
-        std::array<float, 2> waveStartOffsets{};
         std::array<float, 2> currentPitchModulations{};
         float currentGlideNote = 0.0f;
         float targetGlideNote = 0.0f;
@@ -297,7 +299,7 @@ private:
         int filterEnvelopeDelaySamples = 0;
         int vcaDrainSamplesRemaining = 0;
         int controlFilterMode = 0;
-        bool waveStartOffsetsPending = false;
+        bool startPhaseModPending = false;
         bool filterEnvelopePending = false;
         bool filterEnvelopeTriggered = false;
     };

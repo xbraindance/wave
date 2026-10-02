@@ -3120,7 +3120,7 @@ void WaveEmulationAudioProcessor::sendPendingInstrumentFadersToFirmware()
     }
 
     static constexpr std::array<uint32_t, 8> pageOneRecordOffsets {
-        4u, 5u, 7u, 8u, 9u, 10u, 2u, 3u
+        4u, 5u, 7u, 12u, 9u, 10u, 2u, 3u // firmware table 0x14BCA
     };
     static constexpr std::array<uint32_t, 8> pageTwoRecordOffsets {
         4u, 5u, 7u, 21u, 22u, 15u, 16u, 11u
@@ -3345,7 +3345,7 @@ void WaveEmulationAudioProcessor::synchronisePerformanceInstrumentsFromFirmware(
             -1.0f, 1.0f, static_cast<float>(byte(5) - 64) / 64.0f);
         const auto panMode = juce::jlimit(0, 2, byte(6));
         const auto auxGain = static_cast<float>(byte(7)) / 127.0f;
-        const auto audioOutput = juce::jlimit(0, 3, byte(8));
+        const auto audioOutput = juce::jlimit(0, 3, byte(12));
         const auto transpose = byte(9) - 64;
         const auto detune = static_cast<float>(byte(10) - 64);
         const auto keyLow = byte(17);
@@ -5748,7 +5748,7 @@ void WaveEmulationAudioProcessor::applyFactoryProgram(int index, bool notifyFirm
         destination.auxGain
             = static_cast<float>(sevenBit(performance[layerOffset + 7])) / 127.0f;
         destination.audioOutput
-            = juce::jlimit(0, 3, sevenBit(performance[layerOffset + 8]));
+            = juce::jlimit(0, 3, sevenBit(performance[layerOffset + 12]));
         destination.keyLow = sevenBit(performance[layerOffset + 17]);
         destination.keyHigh = sevenBit(performance[layerOffset + 18]);
         destination.velocityLow = juce::jmax(1, sevenBit(performance[layerOffset + 19]));
