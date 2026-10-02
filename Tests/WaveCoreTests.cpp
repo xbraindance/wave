@@ -2539,7 +2539,6 @@ void testVoiceBoardWaveRamDecode()
             "Voice-board wave RAM stores leaked into master DRAM");
 }
 
-<<<<<<< HEAD
 void testVoiceBoardRoutingLatchAndBoardLimit()
 {
     // The one-cold slot strap (WDV 0x466 scan, w2sys 0xB80E mask) names boards
@@ -2582,8 +2581,6 @@ void testVoiceBoardRoutingLatchAndBoardLimit()
     require(runtime.unmappedReadCount() == 0, "Routing latch store caused an unmapped read");
 }
 
-=======
->>>>>>> wdv-note-trace-gate
 class Test68000Bus final : public wave::firmware::M68000Bus
 {
 public:
@@ -2987,10 +2984,7 @@ int main()
         testCompletePanelWiringContract();
         testDecodedVoiceBoardProtocol();
         testVoiceBoardWaveRamDecode();
-<<<<<<< HEAD
         testVoiceBoardRoutingLatchAndBoardLimit();
-=======
->>>>>>> wdv-note-trace-gate
         testFirmwareBundleRejectsMissingPath();
         testOfficialFirmwareWhenAvailable();
         std::cout << "WaveCoreTests: all checks passed\n";
