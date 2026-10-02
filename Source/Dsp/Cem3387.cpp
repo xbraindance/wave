@@ -226,10 +226,11 @@ void Cem3387::updateControlVoltages(float vcaLevel) noexcept
         targetVcaCv = quantiseCv(juce::jlimit(0.0f, 1.0f, vcaLevel));
     }
 
-    // WDV schematic sheets 8/9 show the AD7545 feeding PD508 multiplexers,
-    // 3.3 nF hold capacitors and TL064 buffers. A light effective settling
-    // time softens ideal edges while allowing more of the 53 Hz control
-    // stepping through. Age slightly increases acquisition time through switch
+    // WDV schematic sheets 6-15: one shared AD7545 (CVDA) feeds a PD508
+    // multiplexer per voice, 33 nF hold capacitors and TL064 buffers. The
+    // schematic RC is only ~15-30 us; this value is a looser, unmeasured
+    // choice that softens ideal edges while allowing more of the 53 Hz
+    // control stepping through. Age slightly increases acquisition time through switch
     // and capacitor leakage/tolerance.
     const auto settle = [this](float current, float target) {
         return current + (target - current) * controlSlew;

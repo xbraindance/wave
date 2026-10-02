@@ -94,4 +94,34 @@ ReferenceComparator::Metrics ReferenceComparator::compare(
     result.peakError = peak;
     return result;
 }
+
+ReferenceComparator::ExactResult ReferenceComparator::compareExact(
+    const juce::AudioBuffer<float>& reference, const juce::AudioBuffer<float>& candidate,
+    float tolerance, int maximumLagSamples) noexcept
+{
+    ExactResult result;
+    result.lagSamples = compare(reference, candidate, maximumLagSamples).lagSamples;
+    const auto channels = juce::jmin(reference.getNumChannels(), candidate.getNumChannels());
+    const auto samples = juce::jmin(reference.getNumSamples(), candidate.getNumSamples());
+    const auto start = juce::jmax(0, -result.lagSamples);
+    const auto end = juce::jmin(samples, samples - result.lagSamples);
+    for (int channel = 0; channel < channels; ++channel)
+    {
+        const auto* ref = reference.getReadPointer(channel);
+        const auto* model = candidate.getReadPointer(channel);
+        for (int sample = start; sample < end; ++sample)
+        {
+            const auto diff = std::abs(ref[sample] - model[sample + result.lagSamples]);
+            ++result.compared;
+            result.maxAbsDiff = juce::jmax(result.maxAbsDiff, diff);
+            if (diff > tolerance)
+            {
+                ++result.mismatches;
+                if (result.firstMismatch < 0 || sample < result.firstMismatch)
+                    result.firstMismatch = sample;
+            }
+        }
+    }
+    return result;
+}
 } // namespace wave::dsp

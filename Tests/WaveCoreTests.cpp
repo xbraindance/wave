@@ -2248,6 +2248,15 @@ void testReferenceComparison()
                 && deterministic.rmsError < 1.0e-7f,
             "Audio model is not deterministic enough for capture comparison");
 
+    const auto exact = wave::dsp::ReferenceComparator::compareExact(reference, repeat, 0.0f, 8);
+    require(exact.compared > 0 && exact.mismatches == 0 && exact.firstMismatch == -1,
+            "Exact comparison of two identical renders found mismatches");
+    auto perturbed = repeat;
+    perturbed.getWritePointer(0)[1000] += 0.01f;
+    const auto exactBad = wave::dsp::ReferenceComparator::compareExact(reference, perturbed, 0.001f, 8);
+    require(exactBad.lagSamples == 0 && exactBad.mismatches == 1 && exactBad.firstMismatch == 1000,
+            "Exact comparison missed a single perturbed sample");
+
     const auto* capturePath = std::getenv("WAVE_REFERENCE_CAPTURE");
     if (capturePath == nullptr)
         return;
