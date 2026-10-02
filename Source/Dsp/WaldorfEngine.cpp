@@ -483,7 +483,6 @@ void WaldorfEngine::Voice::reset()
     active = false;
     currentWavePosition = 0.0f;
     currentLfoValues.fill(0.0f);
-    waveStartOffsets.fill(0.0f);
     currentPitchModulations.fill(0.0f);
     currentGlideNote = 0.0f;
     targetGlideNote = 0.0f;
@@ -517,7 +516,7 @@ void WaldorfEngine::Voice::reset()
     vcaDrainSamplesRemaining = 0;
     controlFilterMode = 0;
     asicClockPhase = 1.0;
-    waveStartOffsetsPending = false;
+    startPhaseModPending = false;
     filterEnvelopePending = false;
     filterEnvelopeTriggered = false;
 }
@@ -648,8 +647,7 @@ void WaldorfEngine::Voice::start(int midiNote, int midiChannel, float noteVeloci
     for (size_t lfo = 0; lfo < lfos.size(); ++lfo)
         lfos[lfo].noteOn(parameters.lfos[lfo].sync,
                          parameters.lfos[lfo].phaseDegrees);
-    waveStartOffsets.fill(0.0f);
-    waveStartOffsetsPending = true;
+    startPhaseModPending = true;
 }
 
 void WaldorfEngine::Voice::release(bool allowSustain)
@@ -853,24 +851,29 @@ Cem3387::StereoSample WaldorfEngine::Voice::process(
     {
         // Start modifiers are sampled at note-on; all other WDV targets are
         // refreshed by the voice-board control interrupt rather than by the
-        // host audio clock.
-        if (waveStartOffsetsPending)
+        // host audio clock. WDV 0xF92 adds the route to Startphase (sound
+        // byte 27/43, one full cycle at full scale) and clamps it to 1..127;
+        // a Startphase of 0 is a free start and ignores the route.
+        if (startPhaseModPending)
         {
-            waveStartOffsets[0]
-                = 64.0f
-                  * wdvAmountDepth(
-                      parameters.modulationRoutes[parameters::wave1StartMod].amount)
-                  * routeValue(parameters::wave1StartMod, parameters, env,
-                               waveEnvelopeValue, currentLfoValues, modWheel,
-                               channelPressure, pitchBend);
-            waveStartOffsets[1]
-                = 64.0f
-                  * wdvAmountDepth(
-                      parameters.modulationRoutes[parameters::wave2StartMod].amount)
-                  * routeValue(parameters::wave2StartMod, parameters, env,
-                               waveEnvelopeValue, currentLfoValues, modWheel,
-                               channelPressure, pitchBend);
-            waveStartOffsetsPending = false;
+            constexpr std::array<parameters::ModulationRouteIndex, 2> startRoutes {
+                parameters::wave1StartMod, parameters::wave2StartMod
+            };
+            std::array<OscillatorChipProxy*, 2> oscillators { &oscillator1, &oscillator2 };
+            for (size_t i = 0; i < startRoutes.size(); ++i)
+            {
+                const auto programmed = parameters.wavePhases[i];
+                if (programmed <= 0.0f)
+                    continue;
+                const auto modulation
+                    = 128.0f
+                      * wdvAmountDepth(parameters.modulationRoutes[startRoutes[i]].amount)
+                      * routeValue(startRoutes[i], parameters, env, waveEnvelopeValue,
+                                   currentLfoValues, modWheel, channelPressure, pitchBend);
+                const auto steps = std::floor(programmed + modulation);
+                oscillators[i]->reset(juce::jlimit(1.0f, 127.0f, steps) / 128.0);
+            }
+            startPhaseModPending = false;
         }
 
         const auto bend1 = pitchBend * parameters.oscillatorBendRanges[0] / 2.0f;
@@ -926,8 +929,8 @@ Cem3387::StereoSample WaldorfEngine::Voice::process(
             baseFrequency * performanceRatio
             * std::exp2((pitch2 + detune[1] / 100.0f) / 12.0f));
 
-        const auto wave1Mod = waveStartOffsets[0]
-            + 64.0f * wdvAmountDepth(
+        const auto wave1Mod
+            = 64.0f * wdvAmountDepth(
                           parameters.modulationRoutes[parameters::wave1Mod1].amount)
                   * routeValue(parameters::wave1Mod1, parameters, env,
                                waveEnvelopeValue, currentLfoValues, modWheel,
@@ -947,8 +950,8 @@ Cem3387::StereoSample WaldorfEngine::Voice::process(
                 + 64.0f * wdvAmountDepth(parameters.waveKeytrackAmounts[0]) * keyPosition
                 + wave1Mod);
         currentWavePosition = controlWavePositions[0];
-        const auto wave2Mod = waveStartOffsets[1]
-            + 64.0f * wdvAmountDepth(
+        const auto wave2Mod
+            = 64.0f * wdvAmountDepth(
                           parameters.modulationRoutes[parameters::wave2Mod1].amount)
                   * routeValue(parameters::wave2Mod1, parameters, env,
                                waveEnvelopeValue, currentLfoValues, modWheel,
@@ -1513,7 +1516,7 @@ void WaldorfEngine::renderRangeChunk(juce::AudioBuffer<float>& output,
             continue;
         }
         const auto& layer = performance.layers[static_cast<size_t>(voice.layerIndex)];
-        const auto audible = !layer.muted && layer.audioOutput == 0
+        const auto audible = !layer.muted && layer.audioOutput == PerformanceLayer::mainAudioOut
                              && (!hasSoloedInstrument || layer.soloed);
         voice.currentFreeWheel
             = juce::jlimit(-1.0f, 1.0f,
@@ -1846,7 +1849,7 @@ WaldorfEngine::VoiceProbe WaldorfEngine::probeVoice(
     voice.start(midiNote, 1, velocity, order, order, layerIndex, layer,
                 tunedNote, tunedNote, 0.0f,
                 false, false, 0.0f, 0, 0.0f, 0.0f, 0.0f);
-    const auto performanceGain = layer.audioOutput == 0 ? layer.gain : 0.0f;
+    const auto performanceGain = layer.audioOutput == PerformanceLayer::mainAudioOut ? layer.gain : 0.0f;
     result.minimumCutoffHz = std::numeric_limits<float>::max();
     double energy = 0.0;
     for (int sample = 0; sample < samples; ++sample)

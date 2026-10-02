@@ -533,6 +533,33 @@ void testDspMathTables()
                 "MIDI pitch lookup table exceeded its error bound");
 }
 
+void testPerformanceAudioOutRouting()
+{
+    // Firmware Audio Out values: 0 Aux only, 1 main, 2 sub 1, 3 sub 2.
+    const auto mainLevel = [](int audioOutput) {
+        wave::dsp::WaldorfEngine engine;
+        engine.prepare(48000.0, 512);
+        wave::dsp::WaldorfEngine::PerformanceSnapshot performance;
+        auto& layer = performance.layers[0];
+        layer.enabled = true;
+        layer.source = 2;
+        layer.audioOutput = audioOutput;
+        layer.sound.attackSeconds = 0.001f;
+        juce::AudioBuffer<float> audio(2, 512);
+        juce::MidiBuffer noteOn;
+        noteOn.addEvent(juce::MidiMessage::noteOn(1, 60, 0.9f), 0);
+        for (int block = 0; block < 4; ++block)
+        {
+            audio.clear();
+            engine.render(audio, block == 0 ? noteOn : juce::MidiBuffer(), performance);
+        }
+        return audio.getMagnitude(0, 512);
+    };
+    require(mainLevel(1) > 1.0e-3f, "Audio Out 'main' (1) is silent");
+    require(mainLevel(0) < 1.0e-4f && mainLevel(2) < 1.0e-4f && mainLevel(3) < 1.0e-4f,
+            "Aux-only and sub outputs reached the main mix");
+}
+
 void testPerformanceTuningTables()
 {
     wave::dsp::WaldorfEngine engine;
@@ -2915,6 +2942,7 @@ int main()
         testWaveLfo();
         testDspMathTables();
         testPerformanceTuningTables();
+        testPerformanceAudioOutRouting();
         testFreeRunningEngineLfo();
         testFactorySetWhenAvailable();
         testPpgRomDecoding();
