@@ -150,6 +150,9 @@ private:
     float a3 = 0.0f;
 };
 
+// Voice-card signal path between the per-voice AD7545 DAC and the CEM3387 SIN
+// pin: WVC input network (R4000-R4006, C4000-C4005, TL062), derived from the
+// service manual schematic by scripts/derive_wvc_input_network.py.
 class ReconstructionStage
 {
 public:
@@ -158,23 +161,22 @@ public:
     void setAge(float amount) noexcept;
     [[nodiscard]] float process(float input) noexcept;
 
+    // The WDV board feeds each voice through a 12-bit AD7545 whose two LSB
+    // inputs are tied low (WD0-WD9 drive DB2-DB11): a 10-bit signed code.
+    static constexpr int dacCodeLimit = 511;
+
 private:
     void updateCoefficients() noexcept;
 
+    static constexpr size_t sectionCount = 6;
     double sampleRate = 44100.0;
-    float state = 0.0f;
-    float secondState = 0.0f;
-    float thirdState = 0.0f;
-    float heldLevel = 0.0f;
+    std::array<float, sectionCount> sectionState{};
+    std::array<float, sectionCount> b0{}, b1{}, a1{};
     float dcState = 0.0f;
     float tolerance = 0.0f;
     float age = 0.0f;
     float coefficientAge = -1.0f;
-    std::array<float, 255> saturatedLevels{};
-    float firstPoleCoefficient = 0.0f;
-    float secondOrderA1 = 1.0f;
-    float secondOrderA2 = 0.0f;
-    float secondOrderA3 = 0.0f;
+    std::array<float, 2 * dacCodeLimit + 1> saturatedLevels{};
     float highPassCoefficient = 0.0f;
 };
 } // namespace wave::dsp

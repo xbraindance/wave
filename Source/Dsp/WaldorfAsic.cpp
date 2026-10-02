@@ -653,9 +653,8 @@ float AsicHighpassFilter::process(float input, float cutoffHz) noexcept
 void ReconstructionStage::prepare(double newSampleRate, float voiceTolerance) noexcept
 {
     sampleRate = juce::jmax(1.0, newSampleRate);
-    // No measured per-voice spread is available for the fixed reconstruction
-    // network. Do not invent one: unlike the CEM VCF, this network has no
-    // service trim from which its actual deviation can be inferred.
+    // The network is built from fixed 1% resistors and capacitors with no
+    // service trim, so no per-voice spread is invented for it.
     juce::ignoreUnused(voiceTolerance);
     tolerance = 0.0f;
     coefficientAge = -1.0f;
@@ -665,10 +664,7 @@ void ReconstructionStage::prepare(double newSampleRate, float voiceTolerance) no
 
 void ReconstructionStage::reset() noexcept
 {
-    state = 0.0f;
-    secondState = 0.0f;
-    thirdState = 0.0f;
-    heldLevel = 0.0f;
+    sectionState.fill(0.0f);
     dcState = 0.0f;
 }
 
@@ -685,53 +681,70 @@ void ReconstructionStage::setAge(float amount) noexcept
 void ReconstructionStage::updateCoefficients() noexcept
 {
     coefficientAge = age;
-    // The DAC input is rounded to one of 255 signed levels. Cache the exact
-    // nonlinear transfer at those levels instead of calling tanh at 250 kHz.
-    for (int code = -127; code <= 127; ++code)
-        saturatedLevels[static_cast<size_t>(code + 127)] = std::tanh(
-            (static_cast<float>(code) / 127.0f) * (1.0f + age * 0.16f));
-    const auto cutoff = 15400.0f;
-    firstPoleCoefficient = 1.0f
-                           - std::exp(-juce::MathConstants<float>::twoPi * cutoff * 0.5f
-                                      / static_cast<float>(sampleRate));
-    const auto g = std::tan(juce::MathConstants<float>::pi * cutoff
-                            / static_cast<float>(sampleRate));
-    constexpr auto damping = 0.5f;
-    secondOrderA1 = 1.0f / (1.0f + g * (g + damping));
-    secondOrderA2 = g * secondOrderA1;
-    secondOrderA3 = g * secondOrderA2;
+    // Cache the nonlinear transfer at every DAC code instead of calling tanh
+    // at 250 kHz. The saturation itself is not from the schematic.
+    for (int code = -dacCodeLimit; code <= dacCodeLimit; ++code)
+        saturatedLevels[static_cast<size_t>(code + dacCodeLimit)] = std::tanh(
+            (static_cast<float>(code) / static_cast<float>(dacCodeLimit))
+            * (1.0f + age * 0.16f));
+
+    // Poles and zeros (Hz) of the WVC input network, ideal op-amp and source
+    // (scripts/derive_wvc_input_network.py): the C4003/R4003 zero cancels the
+    // 4019 Hz pole, leaving six poles and two zeros. The stage's inversion is not
+    // modelled (all voices share it).
+    struct Section { double zeroHz; double poleHz; };
+    static constexpr std::array<Section, sectionCount> sections {{
+        { 25.6536, 10.2542 },    // C4001/R4004 feedback: bass shelf (10 Hz = 1/2piR4004C4001)
+        { 1808.579, 3784.817 },  // R4002/R4003/C4003 input vs R4005 feedback: treble shelf
+        { 0.0, 21937.57 },       // four upper poles from C4000, C4002, C4004, R4006/C4005
+        { 0.0, 23154.02 },
+        { 0.0, 29019.30 },
+        { 0.0, 41711.73 },
+    }};
+    const auto k = 2.0 * sampleRate;
+    const auto prewarp = [&](double hz) {
+        const auto limited = juce::jmin(hz, sampleRate * 0.45);
+        return k * std::tan(juce::MathConstants<double>::pi * limited / sampleRate);
+    };
+    for (size_t index = 0; index < sections.size(); ++index)
+    {
+        const auto wp = prewarp(sections[index].poleHz);
+        const auto wz = sections[index].zeroHz > 0.0 ? prewarp(sections[index].zeroHz) : 0.0;
+        // H(s) = (1 + s/wz) / (1 + s/wp), s = k (1 - 1/z) / (1 + 1/z).
+        const auto zeroTerm = wz > 0.0 ? k / wz : 0.0;
+        const auto poleTerm = k / wp;
+        const auto norm = 1.0 / (1.0 + poleTerm);
+        b0[index] = static_cast<float>((1.0 + zeroTerm) * norm);
+        b1[index] = static_cast<float>((1.0 - zeroTerm) * norm);
+        a1[index] = static_cast<float>((1.0 - poleTerm) * norm);
+    }
     highPassCoefficient = std::exp(-juce::MathConstants<float>::twoPi * 7.0f
                                    / static_cast<float>(sampleRate));
 }
 
 float ReconstructionStage::process(float input) noexcept
 {
-    // The PD508 output is an eight-bit multiplexed level feeding a held and
-    // reconstructed analogue path. These are observable boundary behaviours;
-    // no undocumented oscillator-chip internals are assumed here.
-    const auto code = static_cast<int>(std::round(
-        juce::jlimit(-1.0f, 1.0f, input) * 127.0f));
     // OscillatorChipProxy has already performed the digital sample-and-hold:
-    // its output only changes when the emulated oscillator clock advances.
-    // Following that held value with an 18 ms one-pole here would model a
-    // second, non-existent hold as an audio low-pass at about 9 Hz, removing
-    // virtually the entire wavetable signal.  The PD508 level therefore
-    // drives the analogue reconstruction filter directly.
-    heldLevel = static_cast<float>(code) / 127.0f;
-    const auto slewInput = saturatedLevels[static_cast<size_t>(code + 127)];
-    // CEM3387 datasheet application: the fixed three-pole reconstruction
-    // section is a one-pole followed by a second-order 1 dB Chebyshev stage.
-    // Its first pole is half the final pole frequency and the second-order
-    // damping factor is 0.5 (Q=2), as selected by the Wave voice-card caps.
-    state += firstPoleCoefficient * (slewInput - state);
-    const auto v3 = state - thirdState;
-    const auto v1 = secondOrderA1 * secondState + secondOrderA2 * v3;
-    const auto v2 = thirdState + secondOrderA2 * secondState + secondOrderA3 * v3;
-    secondState = 2.0f * v1 - secondState;
-    thirdState = 2.0f * v2 - thirdState;
+    // its output only changes when the emulated oscillator clock advances,
+    // so the DAC code drives the analogue network directly.
+    const auto code = static_cast<int>(std::round(
+        juce::jlimit(-1.0f, 1.0f, input) * static_cast<float>(dacCodeLimit)));
+    // DC gain of the network: (R4004 + R4005) / R4002 = 2.5, less the
+    // R4000/R4001 and R4006/R4014 dividers. The shelves are relative to it.
+    constexpr auto networkDcGain = 2.3381f;
+    auto signal = networkDcGain * saturatedLevels[static_cast<size_t>(code + dacCodeLimit)];
+    for (size_t index = 0; index < sectionCount; ++index)
+    {
+        // Transposed direct form II first-order section.
+        const auto out = b0[index] * signal + sectionState[index];
+        sectionState[index] = b1[index] * signal - a1[index] * out;
+        signal = out;
+    }
 
-    const auto dc = v2 + highPassCoefficient * (dcState - v2);
-    const auto output = v2 - dc;
+    // C4006 (10 uF) couples the network to SIN. The 7 Hz corner is not from
+    // the schematic: it depends on the CEM3387 SIN input impedance.
+    const auto dc = signal + highPassCoefficient * (dcState - signal);
+    const auto output = signal - dc;
     dcState = dc;
     return output;
 }
